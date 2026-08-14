@@ -3,9 +3,14 @@ import edge_tts
 import os
 import uuid
 import subprocess
+import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
 app = FastAPI()
+
+# БЕЗПЕЧНО: токен та ID беруться із захищених змінних середовища Render
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID", "1792535510")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "Montserrat-VariableFont_wght.ttf")
@@ -19,6 +24,23 @@ TEXT_COLOR = (255, 255, 255, 255)
 @app.get("/")
 async def root():
     return {"status": "ok"}
+
+async def send_video_to_telegram(video_path: str):
+    if not TELEGRAM_BOT_TOKEN:
+        print("Error: TELEGRAM_BOT_TOKEN is not set in environment variables!")
+        return
+        
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
+    async with aiohttp.ClientSession() as session:
+        with open(video_path, "rb") as video_file:
+            data = aiohttp.FormData()
+            data.add_field('chat_id', CHAT_ID)
+            data.add_field('video', video_file, filename='video.mp4')
+            try:
+                async with session.post(url, data=data) as response:
+                    return await response.json()
+            except Exception as e:
+                print(f"Telegram error: {e}")
 
 def wrap_text(draw, text, font, max_width):
     words = text.split()
@@ -51,7 +73,6 @@ def create_text_overlay(text, output_path):
 
     box_top = (CANVAS_H - box_height) // 2
     box_left, box_right = 60, CANVAS_W - 60
-    
     draw.rounded_rectangle([box_left, box_top, box_right, box_top + box_height], radius=30, fill=BOX_BG)
     draw.rounded_rectangle([box_left, box_top + 30, box_left + 10, box_top + box_height - 30], radius=5, fill=BOX_ACCENT)
 
@@ -69,14 +90,10 @@ async def process_video_task(text: str, uid: str):
     output_video_path = f"/tmp/video_{uid}.mp4"
 
     try:
-        # 1. TTS
         communicate = edge_tts.Communicate(text, "uk-UA-PolinaNeural")
         await communicate.save(audio_path)
-
-        # 2. Overlay
         create_text_overlay(text, overlay_path)
 
-        # 3. FFMPEG
         result = subprocess.run([
             "ffmpeg", "-y", "-loop", "1", "-i", BG_PATH,
             "-i", overlay_path, "-i", audio_path,
@@ -86,26 +103,19 @@ async def process_video_task(text: str, uid: str):
             "-shortest", "-pix_fmt", "yuv420p", output_video_path
         ], capture_output=True, text=True)
 
-        if result.returncode != 0:
+        if result.returncode == 0:
+            await send_video_to_telegram(output_video_path)
+        else:
             print(f"FFMPEG Error: {result.stderr}")
-            return
-
-        # Тут можна додати відправку готового відео у свій Telegram-бот або куди планувалося,
-        # оскільки тепер воно зберігається у output_video_path.
         
     finally:
-        # Очищення тимчасових файлів
-        for p in [audio_path, overlay_path]:
-            if os.path.exists(p): os.path.exists(p) and os.remove(p)
+        for p in [audio_path, overlay_path, output_video_path]:
+            if os.path.exists(p): os.remove(p)
 
 @app.post("/generate-video")
 async def generate_video(data: dict, background_tasks: BackgroundTasks):
     text = data.get("text")
     if not text: raise HTTPException(status_code=400, detail="No text provided")
-    
     uid = uuid.uuid4().hex[:8]
-    
-    # Запускаємо процес у фоні, а n8n одразу отримує успішну відповідь без таймауту!
     background_tasks.add_task(process_video_task, text, uid)
-    
     return {"status": "processing_started", "uid": uid}
