@@ -114,7 +114,7 @@ async def generate_video(data: dict):
 
         # 4. Завантажуємо звук і формуємо відео з однієї картинки на тривалість звуку
         audio_clip = AudioFileClip(audio_path)
-        video_clip = ImageClip(image_path).set_duration(audio_clip.duration)
+        video_clip = ImageClip(image_path).with_duration(audio_clip.duration)
         
         # Встановлюємо звук для відео
         final_video = video_clip.set_audio(audio_clip)
