@@ -19,10 +19,9 @@ def read_root():
 def create_text_frame(text: str, bg_path: str, output_path: str):
     """Створює вертикальне зображення 1080x1920 з фоном та плашкою для тексту"""
     try:
-        img = Image.open(bg_path).convert("RGB")
-    except Exception:
-        # Якщо файл фон-картинки не знайдено, робимо темно-сірий фоновий холст
-        img = Image.new("RGB", (1080, 1920), color=(20, 20, 20))
+        font = ImageFont.truetype("Montserrat-VariableFont_wght.ttf", 55)
+    except IOError:
+        font = ImageFont.load_default()
 
     # Масштабуємо фон під вертикальний формат Reels/Shorts (1080x1920)
     img = img.resize((1080, 1920))
