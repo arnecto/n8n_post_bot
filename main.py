@@ -14,6 +14,9 @@ BOX_BG = (10, 8, 20, 210)         # Напівпрозорий чорний
 BOX_ACCENT = (255, 138, 61, 255)  # Помаранчевий акцент
 TEXT_COLOR = (255, 255, 255, 255)
 FONT_PATH = "Montserrat-VariableFont_wght.ttf" # Переконайся, що він у корені
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_PATH = os.path.join(BASE_DIR, "Montserrat-VariableFont_wght.ttf")
+BG_PATH = os.path.join(BASE_DIR, "background.jpg")
 
 def wrap_text(draw, text, font, max_width):
     words = text.split()
