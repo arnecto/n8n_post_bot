@@ -5,7 +5,7 @@ import os
 import uuid
 import requests
 from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import ImageClip, AudioFileClip
+from moviepy import ImageClip, AudioFileClip
 
 app = FastAPI(title="Edge TTS & Reel Video Generation Service")
 
