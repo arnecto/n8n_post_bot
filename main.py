@@ -117,7 +117,7 @@ async def generate_video(data: dict):
         video_clip = ImageClip(image_path).with_duration(audio_clip.duration)
         
         # Встановлюємо звук для відео
-        final_video = video_clip.set_audio(audio_clip)
+        final_video = video_clip.with_audio(audio_clip)
 
         # 5. Рендеримо готовий MP4 файл
         final_video.write_videofile(
