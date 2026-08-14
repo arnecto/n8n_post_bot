@@ -1,30 +1,20 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 import edge_tts
 import os
 import uuid
 import subprocess
-import shutil
 from PIL import Image, ImageDraw, ImageFont
 
 app = FastAPI()
 
-# Базові шляхи
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "Montserrat-VariableFont_wght.ttf")
 BG_PATH = os.path.join(BASE_DIR, "background.jpg")
 
-# Конфігурація дизайну
 CANVAS_W, CANVAS_H = 1080, 1920
 BOX_BG = (10, 8, 20, 210)
 BOX_ACCENT = (255, 138, 61, 255)
 TEXT_COLOR = (255, 255, 255, 255)
-
-def cleanup_files(*paths):
-    """Видаляє тимчасові файли після відправки відповіді"""
-    for path in paths:
-        if os.path.exists(path):
-            os.remove(path)
 
 @app.get("/")
 async def root():
@@ -73,37 +63,49 @@ def create_text_overlay(text, output_path):
         y += line_height
     img.save(output_path)
 
+async def process_video_task(text: str, uid: str):
+    audio_path = f"/tmp/audio_{uid}.mp3"
+    overlay_path = f"/tmp/overlay_{uid}.png"
+    output_video_path = f"/tmp/video_{uid}.mp4"
+
+    try:
+        # 1. TTS
+        communicate = edge_tts.Communicate(text, "uk-UA-PolinaNeural")
+        await communicate.save(audio_path)
+
+        # 2. Overlay
+        create_text_overlay(text, overlay_path)
+
+        # 3. FFMPEG
+        result = subprocess.run([
+            "ffmpeg", "-y", "-loop", "1", "-i", BG_PATH,
+            "-i", overlay_path, "-i", audio_path,
+            "-filter_complex", "[0:v][1:v]overlay=0:0[v]",
+            "-map", "[v]", "-map", "2:a",
+            "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
+            "-shortest", "-pix_fmt", "yuv420p", output_video_path
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"FFMPEG Error: {result.stderr}")
+            return
+
+        # Тут можна додати відправку готового відео у свій Telegram-бот або куди планувалося,
+        # оскільки тепер воно зберігається у output_video_path.
+        
+    finally:
+        # Очищення тимчасових файлів
+        for p in [audio_path, overlay_path]:
+            if os.path.exists(p): os.path.exists(p) and os.remove(p)
+
 @app.post("/generate-video")
 async def generate_video(data: dict, background_tasks: BackgroundTasks):
     text = data.get("text")
     if not text: raise HTTPException(status_code=400, detail="No text provided")
     
     uid = uuid.uuid4().hex[:8]
-    audio_path = f"/tmp/audio_{uid}.mp3"
-    overlay_path = f"/tmp/overlay_{uid}.png"
-    output_video_path = f"/tmp/video_{uid}.mp4"
-
-    # 1. TTS
-    communicate = edge_tts.Communicate(text, "uk-UA-PolinaNeural")
-    await communicate.save(audio_path)
-
-    # 2. Overlay
-    create_text_overlay(text, overlay_path)
-
-    # 3. FFMPEG
-    result = subprocess.run([
-        "ffmpeg", "-y", "-loop", "1", "-i", BG_PATH,
-        "-i", overlay_path, "-i", audio_path,
-        "-filter_complex", "[0:v][1:v]overlay=0:0[v]",
-        "-map", "[v]", "-map", "2:a",
-        "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
-        "-shortest", "-pix_fmt", "yuv420p", output_video_path
-    ], capture_output=True, text=True)
-
-    if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"FFMPEG failed: {result.stderr}")
-
-    # Плануємо видалення файлів після відправки
-    background_tasks.add_task(cleanup_files, audio_path, overlay_path, output_video_path)
     
-    return FileResponse(output_video_path, media_type="video/mp4")
+    # Запускаємо процес у фоні, а n8n одразу отримує успішну відповідь без таймауту!
+    background_tasks.add_task(process_video_task, text, uid)
+    
+    return {"status": "processing_started", "uid": uid}
