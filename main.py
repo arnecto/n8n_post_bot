@@ -8,7 +8,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 app = FastAPI()
 
-# БЕЗПЕЧНО: токен та ID беруться із захищених змінних середовища Render
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID", "1792535510")
 
@@ -25,22 +24,41 @@ TEXT_COLOR = (255, 255, 255, 255)
 async def root():
     return {"status": "ok"}
 
-async def send_video_to_telegram(video_path: str):
+async def telegram_api(method: str, payload: dict):
     if not TELEGRAM_BOT_TOKEN:
-        print("Error: TELEGRAM_BOT_TOKEN is not set in environment variables!")
-        return
-        
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
+        return None
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
     async with aiohttp.ClientSession() as session:
-        with open(video_path, "rb") as video_file:
-            data = aiohttp.FormData()
-            data.add_field('chat_id', CHAT_ID)
-            data.add_field('video', video_file, filename='video.mp4')
-            try:
-                async with session.post(url, data=data) as response:
-                    return await response.json()
-            except Exception as e:
-                print(f"Telegram error: {e}")
+        try:
+            async with session.post(url, json=payload) as response:
+                res_json = await response.json()
+                return res_json.get("result")
+        except Exception as e:
+            print(f"Telegram API error ({method}): {e}")
+            return None
+
+async def send_progress_message(text: str):
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text
+    }
+    result = await telegram_api("sendMessage", payload)
+    return result.get("message_id") if result else None
+
+async def edit_progress_message(message_id: int, text: str):
+    if not message_id:
+        return
+    payload = {
+        "chat_id": CHAT_ID,
+        "message_id": message_id,
+        "text": text
+    }
+    await telegram_api("editMessageText", payload)
+
+def make_progress_bar(percent: int) -> str:
+    blocks = int(percent / 10)
+    bar = "█" * blocks + "░" * (10 - blocks)
+    return f"[{bar}] {percent}%"
 
 def wrap_text(draw, text, font, max_width):
     words = text.split()
@@ -89,11 +107,22 @@ async def process_video_task(text: str, uid: str):
     overlay_path = f"/tmp/overlay_{uid}.png"
     output_video_path = f"/tmp/video_{uid}.mp4"
 
+    # 1. Створюємо початкове повідомлення в Telegram
+    msg_id = await send_progress_message(f"🎬 Генерація відео розпочата...\n{make_progress_bar(0)}")
+
     try:
+        # 2. Етап TTS (0% -> 30%)
+        await edit_progress_message(msg_id, f"🎙 Синтез голосу (TTS)...\n{make_progress_bar(20)}")
         communicate = edge_tts.Communicate(text, "uk-UA-PolinaNeural")
         await communicate.save(audio_path)
+
+        # 3. Етап оверлею (30% -> 50%)
+        await edit_progress_message(msg_id, f"🎨 Створення дизайну тексту...\n{make_progress_bar(50)}")
         create_text_overlay(text, overlay_path)
 
+        # 4. Етап FFmpeg рендерингу (50% -> 80%)
+        await edit_progress_message(msg_id, f"⚙️ Рендеринг відео через FFmpeg...\n{make_progress_bar(80)}")
+        
         result = subprocess.run([
             "ffmpeg", "-y", "-loop", "1", "-i", BG_PATH,
             "-i", overlay_path, "-i", audio_path,
@@ -103,11 +132,33 @@ async def process_video_task(text: str, uid: str):
             "-shortest", "-pix_fmt", "yuv420p", output_video_path
         ], capture_output=True, text=True)
 
-        if result.returncode == 0:
-            await send_video_to_telegram(output_video_path)
-        else:
+        if result.returncode != 0:
             print(f"FFMPEG Error: {result.stderr}")
-        
+            await edit_progress_message(msg_id, "❌ Помилка під час рендерингу відео!")
+            return
+
+        # 5. Відправка готового відео (80% -> 100%)
+        await edit_progress_message(msg_id, f"📤 Завантаження у Telegram...\n{make_progress_bar(95)}")
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
+        async with aiohttp.ClientSession() as session:
+            with open(output_video_path, "rb") as video_file:
+                data = aiohttp.FormData()
+                data.add_field('chat_id', CHAT_ID)
+                data.add_field('video', video_file, filename='video.mp4')
+                data.add_field('caption', "✅ Твоє відео готове!")
+                async with session.post(url, data=data) as response:
+                    await response.json()
+
+        # Видаляємо текстове повідомлення з прогрес-баром, щоб не засмічувати чат
+        if msg_id:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage", json={"chat_id": CHAT_ID, "message_id": msg_id})
+
+    except Exception as e:
+        print(f"Task error: {e}")
+        if msg_id:
+            await edit_progress_message(msg_id, f"❌ Сталася помилка: {str(e)}")
     finally:
         for p in [audio_path, overlay_path, output_video_path]:
             if os.path.exists(p): os.remove(p)
