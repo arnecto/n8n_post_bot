@@ -1,22 +1,34 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 import edge_tts
 import os
 import uuid
 import subprocess
+import shutil
 from PIL import Image, ImageDraw, ImageFont
 
 app = FastAPI()
 
-# Конфігурація дизайну
-CANVAS_W, CANVAS_H = 1080, 1920
-BOX_BG = (10, 8, 20, 210)         # Напівпрозорий чорний
-BOX_ACCENT = (255, 138, 61, 255)  # Помаранчевий акцент
-TEXT_COLOR = (255, 255, 255, 255)
-FONT_PATH = "Montserrat-VariableFont_wght.ttf" # Переконайся, що він у корені
+# Базові шляхи
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "Montserrat-VariableFont_wght.ttf")
 BG_PATH = os.path.join(BASE_DIR, "background.jpg")
+
+# Конфігурація дизайну
+CANVAS_W, CANVAS_H = 1080, 1920
+BOX_BG = (10, 8, 20, 210)
+BOX_ACCENT = (255, 138, 61, 255)
+TEXT_COLOR = (255, 255, 255, 255)
+
+def cleanup_files(*paths):
+    """Видаляє тимчасові файли після відправки відповіді"""
+    for path in paths:
+        if os.path.exists(path):
+            os.remove(path)
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
 
 def wrap_text(draw, text, font, max_width):
     words = text.split()
@@ -35,27 +47,22 @@ def wrap_text(draw, text, font, max_width):
 def create_text_overlay(text, output_path):
     img = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-
     max_text_width = CANVAS_W - 200
     max_box_height = int(CANVAS_H * 0.6)
 
-    # Адаптивний підбір розміру шрифту
     font_size = 50
     while font_size >= 26:
         font = ImageFont.truetype(FONT_PATH, font_size)
         lines = wrap_text(draw, text, font, max_text_width)
         line_height = int(font_size * 1.3)
         box_height = (line_height * len(lines)) + 100
-        if box_height <= max_box_height:
-            break
+        if box_height <= max_box_height: break
         font_size -= 4
 
     box_top = (CANVAS_H - box_height) // 2
     box_left, box_right = 60, CANVAS_W - 60
     
-    # Малюємо плашку
     draw.rounded_rectangle([box_left, box_top, box_right, box_top + box_height], radius=30, fill=BOX_BG)
-    # Акцентна смужка
     draw.rounded_rectangle([box_left, box_top + 30, box_left + 10, box_top + box_height - 30], radius=5, fill=BOX_ACCENT)
 
     y = box_top + 50
@@ -64,18 +71,17 @@ def create_text_overlay(text, output_path):
         x = (CANVAS_W - (bbox[2] - bbox[0])) // 2
         draw.text((x, y), line, font=font, fill=TEXT_COLOR)
         y += line_height
-
     img.save(output_path)
 
 @app.post("/generate-video")
-async def generate_video(data: dict):
+async def generate_video(data: dict, background_tasks: BackgroundTasks):
     text = data.get("text")
-    uid = uuid.uuid4().hex[:8]
+    if not text: raise HTTPException(status_code=400, detail="No text provided")
     
+    uid = uuid.uuid4().hex[:8]
     audio_path = f"/tmp/audio_{uid}.mp3"
     overlay_path = f"/tmp/overlay_{uid}.png"
     output_video_path = f"/tmp/video_{uid}.mp4"
-    bg_path = "background.jpg" # Твій фоновий файл
 
     # 1. TTS
     communicate = edge_tts.Communicate(text, "uk-UA-PolinaNeural")
@@ -84,9 +90,7 @@ async def generate_video(data: dict):
     # 2. Overlay
     create_text_overlay(text, overlay_path)
 
-    # 3. FFMPEG (Склеюємо)
-    # Беремо статичний фон і накладаємо текст + звук
-# 3. FFMPEG
+    # 3. FFMPEG
     result = subprocess.run([
         "ffmpeg", "-y", "-loop", "1", "-i", BG_PATH,
         "-i", overlay_path, "-i", audio_path,
@@ -97,7 +101,9 @@ async def generate_video(data: dict):
     ], capture_output=True, text=True)
 
     if result.returncode != 0:
-        print(f"FFMPEG Error: {result.stderr}")
         raise HTTPException(status_code=500, detail=f"FFMPEG failed: {result.stderr}")
 
+    # Плануємо видалення файлів після відправки
+    background_tasks.add_task(cleanup_files, audio_path, overlay_path, output_video_path)
+    
     return FileResponse(output_video_path, media_type="video/mp4")
