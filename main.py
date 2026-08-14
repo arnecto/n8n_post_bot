@@ -18,29 +18,28 @@ def read_root():
 
 def create_text_frame(text: str, bg_path: str, output_path: str):
     """Створює вертикальне зображення 1080x1920 з фоном та плашкою для тексту"""
+    
+    # 1. Відкриваємо та масштабуємо фон
     try:
-        font = ImageFont.truetype("Montserrat-VariableFont_wght.ttf", 55)
-    except IOError:
-        font = ImageFont.load_default()
-
-    # Масштабуємо фон під вертикальний формат Reels/Shorts (1080x1920)
+        img = Image.open(bg_path).convert("RGB")
+    except Exception:
+        img = Image.new("RGB", (1080, 1920), color=(20, 20, 20))
+        
     img = img.resize((1080, 1920))
     draw = ImageDraw.Draw(img)
 
-    # Напівпрозора чорна плашка по центру для читабельності тексту
-    # Координати: x1, y1, x2, y2
+    # 2. Налаштовуємо шрифт
+    try:
+        # Використовуємо назву, яку ти завантажив у репозиторій
+        font = ImageFont.truetype("Montserrat-VariableFont_wght.ttf", 55)
+    except IOError:
+        # Якщо шрифт не знайдено, беремо стандартний
+        font = ImageFont.load_default()
+
+    # 3. Малюємо плашку
     draw.rectangle([(80, 750), (1000, 1250)], fill=(0, 0, 0, 200))
 
-    # Спроба завантажити стандартний системний шрифт, або дефолтний
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 55)
-    except IOError:
-        try:
-            font = ImageFont.truetype("arial.ttf", 55)
-        except IOError:
-            font = ImageFont.load_default()
-
-    # Простий алгоритм переносу слів у рядки
+    # 4. Логіка переносу тексту
     margin_x = 120
     max_width = 1080 - (margin_x * 2)
     words = text.split()
@@ -49,7 +48,6 @@ def create_text_frame(text: str, bg_path: str, output_path: str):
 
     for word in words:
         test_line = current_line + " " + word if current_line else word
-        # Визначаємо ширину тексту
         bbox = draw.textbbox((0, 0), test_line, font=font)
         if (bbox[2] - bbox[0]) <= max_width:
             current_line = test_line
@@ -59,12 +57,12 @@ def create_text_frame(text: str, bg_path: str, output_path: str):
     if current_line:
         lines.append(current_line)
 
-    # Малюємо рядки по центру плашки
+    # 5. Малюємо текст
     y_text = 820
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         w = bbox[2] - bbox[0]
-        x = (1080 - w) // 2  # центруємо по горизонталі
+        x = (1080 - w) // 2
         draw.text((x, y_text), line, font=font, fill="white")
         y_text += 75
 
