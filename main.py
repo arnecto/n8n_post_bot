@@ -86,13 +86,18 @@ async def generate_video(data: dict):
 
     # 3. FFMPEG (Склеюємо)
     # Беремо статичний фон і накладаємо текст + звук
-    subprocess.run([
-        "ffmpeg", "-y", "-loop", "1", "-i", bg_path,
+# 3. FFMPEG
+    result = subprocess.run([
+        "ffmpeg", "-y", "-loop", "1", "-i", BG_PATH,
         "-i", overlay_path, "-i", audio_path,
         "-filter_complex", "[0:v][1:v]overlay=0:0[v]",
         "-map", "[v]", "-map", "2:a",
         "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
         "-shortest", "-pix_fmt", "yuv420p", output_video_path
-    ], check=True)
+    ], capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(f"FFMPEG Error: {result.stderr}")
+        raise HTTPException(status_code=500, detail=f"FFMPEG failed: {result.stderr}")
 
     return FileResponse(output_video_path, media_type="video/mp4")
