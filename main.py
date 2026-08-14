@@ -3,140 +3,93 @@ from fastapi.responses import FileResponse
 import edge_tts
 import os
 import uuid
-import requests
+import subprocess
 from PIL import Image, ImageDraw, ImageFont
-from moviepy import ImageClip, AudioFileClip
 
-app = FastAPI(title="Edge TTS & Reel Video Generation Service")
+app = FastAPI()
 
-# Дефолтний фон, якщо картинка з новини не передана (поклади у корінь проєкта)
-DEFAULT_BACKGROUND = "background.jpg"
+# Конфігурація дизайну
+CANVAS_W, CANVAS_H = 1080, 1920
+BOX_BG = (10, 8, 20, 210)         # Напівпрозорий чорний
+BOX_ACCENT = (255, 138, 61, 255)  # Помаранчевий акцент
+TEXT_COLOR = (255, 255, 255, 255)
+FONT_PATH = "Montserrat-VariableFont_wght.ttf" # Переконайся, що він у корені
 
-@app.get("/")
-def read_root():
-    return {"status": "ok", "message": "Video & TTS Service is running!"}
+def wrap_text(draw, text, font, max_width):
+    words = text.split()
+    lines, current = [], ""
+    for word in words:
+        trial = f"{current} {word}".strip()
+        bbox = draw.textbbox((0, 0), trial, font=font)
+        if (bbox[2] - bbox[0]) <= max_width:
+            current = trial
+        else:
+            if current: lines.append(current)
+            current = word
+    if current: lines.append(current)
+    return lines
 
-def create_text_frame(text: str, bg_path: str, output_path: str):
-    """Створює вертикальне зображення 1080x1920 з фоном та плашкою для тексту"""
-    
-    # 1. Відкриваємо та масштабуємо фон
-    try:
-        img = Image.open(bg_path).convert("RGB")
-    except Exception:
-        img = Image.new("RGB", (1080, 1920), color=(20, 20, 20))
-        
-    img = img.resize((1080, 1920))
+def create_text_overlay(text, output_path):
+    img = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 2. Налаштовуємо шрифт
-    try:
-        # Використовуємо назву, яку ти завантажив у репозиторій
-        font = ImageFont.truetype("Montserrat-VariableFont_wght.ttf", 55)
-    except IOError:
-        # Якщо шрифт не знайдено, беремо стандартний
-        font = ImageFont.load_default()
+    max_text_width = CANVAS_W - 200
+    max_box_height = int(CANVAS_H * 0.6)
 
-    # 3. Малюємо плашку
-    draw.rectangle([(80, 750), (1000, 1250)], fill=(0, 0, 0, 200))
+    # Адаптивний підбір розміру шрифту
+    font_size = 50
+    while font_size >= 26:
+        font = ImageFont.truetype(FONT_PATH, font_size)
+        lines = wrap_text(draw, text, font, max_text_width)
+        line_height = int(font_size * 1.3)
+        box_height = (line_height * len(lines)) + 100
+        if box_height <= max_box_height:
+            break
+        font_size -= 4
 
-    # 4. Логіка переносу тексту
-    margin_x = 120
-    max_width = 1080 - (margin_x * 2)
-    words = text.split()
-    lines = []
-    current_line = ""
+    box_top = (CANVAS_H - box_height) // 2
+    box_left, box_right = 60, CANVAS_W - 60
+    
+    # Малюємо плашку
+    draw.rounded_rectangle([box_left, box_top, box_right, box_top + box_height], radius=30, fill=BOX_BG)
+    # Акцентна смужка
+    draw.rounded_rectangle([box_left, box_top + 30, box_left + 10, box_top + box_height - 30], radius=5, fill=BOX_ACCENT)
 
-    for word in words:
-        test_line = current_line + " " + word if current_line else word
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        if (bbox[2] - bbox[0]) <= max_width:
-            current_line = test_line
-        else:
-            lines.append(current_line)
-            current_line = word
-    if current_line:
-        lines.append(current_line)
-
-    # 5. Малюємо текст
-    y_text = 820
+    y = box_top + 50
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
-        w = bbox[2] - bbox[0]
-        x = (1080 - w) // 2
-        draw.text((x, y_text), line, font=font, fill="white")
-        y_text += 75
+        x = (CANVAS_W - (bbox[2] - bbox[0])) // 2
+        draw.text((x, y), line, font=font, fill=TEXT_COLOR)
+        y += line_height
 
     img.save(output_path)
 
 @app.post("/generate-video")
 async def generate_video(data: dict):
     text = data.get("text")
-    voice = data.get("voice", "uk-UA-OstapNeural")
-    rate = data.get("rate", "+0%")
-    image_url = data.get("image_url")  # Посилання на фото з новини (якщо є)
-
-    if not text:
-        raise HTTPException(status_code=400, detail="Text field is required")
-
     uid = uuid.uuid4().hex[:8]
-    audio_path = os.path.join("/tmp", f"audio_{uid}.mp3")
-    image_path = os.path.join("/tmp", f"img_{uid}.jpg")
-    output_video_path = os.path.join("/tmp", f"video_{uid}.mp4")
+    
+    audio_path = f"/tmp/audio_{uid}.mp3"
+    overlay_path = f"/tmp/overlay_{uid}.png"
+    output_video_path = f"/tmp/video_{uid}.mp4"
+    bg_path = "background.jpg" # Твій фоновий файл
 
-    try:
-        # 1. Генерируємо аудіо через edge-tts
-        communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
-        await communicate.save(audio_path)
+    # 1. TTS
+    communicate = edge_tts.Communicate(text, "uk-UA-PolinaNeural")
+    await communicate.save(audio_path)
 
-        # 2. Визначаємося з фоновим зображенням
-        bg_to_use = DEFAULT_BACKGROUND
-        if image_url:
-            try:
-                response = requests.get(image_url, timeout=5)
-                if response.status_code == 200:
-                    with open(image_path, "wb") as f:
-                        f.write(response.content)
-                    bg_to_use = image_path
-            except Exception:
-                pass # Якщо не вдалося завантажити картинку з новини, впадемо на дефолтний фон
+    # 2. Overlay
+    create_text_overlay(text, overlay_path)
 
-        if not os.path.exists(bg_to_use):
-            # Якщо немає ніякого фону, створюємо чорну заглушку
-            img = Image.new("RGB", (1080, 1920), color=(10, 10, 10))
-            img.save(image_path)
-            bg_to_use = image_path
+    # 3. FFMPEG (Склеюємо)
+    # Беремо статичний фон і накладаємо текст + звук
+    subprocess.run([
+        "ffmpeg", "-y", "-loop", "1", "-i", bg_path,
+        "-i", overlay_path, "-i", audio_path,
+        "-filter_complex", "[0:v][1:v]overlay=0:0[v]",
+        "-map", "[v]", "-map", "2:a",
+        "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
+        "-shortest", "-pix_fmt", "yuv420p", output_video_path
+    ], check=True)
 
-        # 3. Створюємо кадр із текстом та фоном
-        create_text_frame(text, bg_to_use, image_path)
-
-        # 4. Завантажуємо звук і формуємо відео з однієї картинки на тривалість звуку
-        audio_clip = AudioFileClip(audio_path)
-        video_clip = ImageClip(image_path).with_duration(audio_clip.duration)
-        
-        # Встановлюємо звук для відео
-        final_video = video_clip.with_audio(audio_clip)
-
-        # 5. Рендеримо готовий MP4 файл
-        final_video.write_videofile(
-            output_video_path,
-            fps=24,
-            codec="libx264",
-            audio_codec="aac",
-            preset="ultrafast",
-            logger=None
-        )
-
-        # Закриваємо клієнти
-        audio_clip.close()
-        video_clip.close()
-        final_video.close()
-
-        # Прибираємо сміття з /tmp
-        for p in [audio_path, image_path]:
-            if os.path.exists(p) and p != image_path: # не видаляємо дефолтний фон якщо він юзається
-                os.remove(p)
-
-        return FileResponse(output_video_path, media_type="video/mp4", filename=f"news_reel_{uid}.mp4")
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return FileResponse(output_video_path, media_type="video/mp4")
