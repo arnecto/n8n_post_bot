@@ -178,9 +178,11 @@ async def process_video_task(text: str, uid: str):
                 await session.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage", json={"chat_id": CHAT_ID, "message_id": msg_id})
 
     except Exception as e:
-        print(f"Task error: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"CRITICAL TASK ERROR:\n{error_details}") # Виведе повний стек помилки в консоль Docker
         if msg_id:
-            await edit_progress_message(msg_id, f"❌ Сталася помилка: {str(e)}")
+            await edit_progress_message(msg_id, f"❌ Помилка: {str(e)[:100]}")
             
     finally:
         # Очищення тимчасових файлів з дисків контейнера у будь-якому випадку (успіх/помилка)
