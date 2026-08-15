@@ -1,7 +1,5 @@
 fastapi
 uvicorn
 edge-tts
-moviepy
-requests
 Pillow
 python-multipart
