@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Ініціалізація FastAPI додатку
 app = FastAPI()
 
-# Безпечне отримання секретних даних із змінних середовища Render
+# Безпечне отримання секретних даних із змінних середовища
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID", "1792535510")
 
@@ -107,12 +107,12 @@ def create_text_overlay(text, output_path):
     draw.rounded_rectangle([box_left, box_top, box_right, box_top + box_height], radius=30, fill=BOX_BG)
     draw.rounded_rectangle([box_left, box_top + 30, box_left + 10, box_top + box_height - 30], radius=5, fill=BOX_ACCENT)
 
+    # Виведення рядків тексту по центру плашки
     y = box_top + 50
     for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        x = (CANVAS_W - (bbox[2] - bbox[0])) // 2
-        draw.text((x, y), line, font=font, fill=TEXT_COLOR)
+        draw.text((CANVAS_W // 2, y), line, font=font, fill=TEXT_COLOR, anchor="mt")
         y += line_height
+        
     img.save(output_path)
 
 # Головна фонова задача обробки та рендерингу відео
@@ -135,8 +135,6 @@ async def process_video_task(text: str, uid: str):
         create_text_overlay(text, overlay_path)
 
         # 4. Етап рендерингу через FFmpeg -> оновлюємо до 80%
-        # ОПТИМІЗАЦІЯ ДЛЯ RENDER: додано "-threads 1" та "-preset ultrafast", 
-        # щоб процес не перевищував ліміт оперативної пам'яті (уникнення помилки 137 OOM)
         await edit_progress_message(msg_id, f"⚙️ Рендеринг відео через FFmpeg...\n{make_progress_bar(80)}")
         
         result = subprocess.run([
@@ -180,7 +178,7 @@ async def process_video_task(text: str, uid: str):
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        print(f"CRITICAL TASK ERROR:\n{error_details}") # Виведе повний стек помилки в консоль Docker
+        print(f"CRITICAL TASK ERROR:\n{error_details}")
         if msg_id:
             await edit_progress_message(msg_id, f"❌ Помилка: {str(e)[:100]}")
             
