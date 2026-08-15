@@ -5,8 +5,6 @@ import uuid
 import subprocess
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
-from dotenv import load_dotenv
-load_dotenv()
 
 # Ініціалізація FastAPI додатку
 app = FastAPI()
